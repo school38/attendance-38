@@ -112,6 +112,13 @@
   .fb-text{font-size:14px;margin-top:4px;line-height:1.75;color:var(--text);}
   .fb-del{position:absolute;left:10px;top:10px;background:#FBEAE6;color:var(--danger);border:1px solid #F0D2CB;
     border-radius:7px;width:26px;height:26px;font-size:13px;cursor:pointer;}
+  .mw-item{border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;
+    border-right:4px solid var(--gold);}
+  .mw-month{font-family:'Cairo';font-weight:800;font-size:14px;color:var(--green-dark);margin-bottom:8px;}
+  .mw-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13.5px;padding:4px 0;}
+  .mw-cat{color:var(--muted);font-size:12px;min-width:110px;}
+  .mw-win{font-family:'Cairo';font-weight:700;color:var(--green-dark);}
+  .mw-score{color:var(--muted);font-size:12px;}
   .fb-empty{text-align:center;color:var(--muted);font-size:13.5px;padding:22px 10px;}
   button.primary{
     margin-top:16px;width:100%;padding:12px;border:none;border-radius:9px;
@@ -144,7 +151,7 @@
   <div class="row">
     <div>
       <h1>منافسة الانضباط</h1>
-      <p>منافسة أسبوعية بين الفصول على الحضور والانضباط — الفصل الدراسي الأول 1448/1449هـ</p>
+      <p>منافسة بين الفصول على الحضور والانضباط — يُرشَّح الفصل الفائز شهريًا — الفصل الدراسي الأول 1448/1449هـ</p>
     </div>
     <div class="week-badge" id="weekBadge">
       <div class="n">—</div>
@@ -184,6 +191,12 @@
     </div>
 
     <div class="card">
+      <h2>الفصل الفائز لهذا الشهر</h2>
+      <div id="monthlyWinners"></div>
+      <div class="note">يُرشَّح الفائز شهريًا: الفصل صاحب أقل مؤشر انضباط خلال الشهر، لكل فئة على حدة.</div>
+    </div>
+
+    <div class="card">
       <h2>الاتجاه الأسبوعي لكل فصل</h2>
       <canvas id="lineChart" height="180"></canvas>
     </div>
@@ -195,9 +208,9 @@
     </div>
 
     <div class="card">
-      <h2>تقرير أسبوعي (PDF)</h2>
-      <label>اختاري الأسبوع</label>
-      <select id="reportWeekSelect"></select>
+      <h2>تقرير شهري (PDF)</h2>
+      <label>اختاري الشهر</label>
+      <select id="reportMonthSelect"></select>
       <label>الفئة</label>
       <select id="reportCategorySelect">
         <option value="all">كل الفصول</option>
@@ -334,6 +347,47 @@ const WEEKS = [
 let SCHOOL_IDS = []; // تُحدَّث تلقائيًا من قاعدة البيانات — تدعم إضافة وحذف مدارس
 function fmtRange(w){return `${w.start.slice(5)} → ${w.end.slice(5)}`;}
 
+/* ============================================================
+   تجميع الأسابيع في شهور — الترشيح والتقارير تتم شهريًا
+   (كل أسبوع يُنسب للشهر الذي بدأ فيه)
+   ============================================================ */
+const MONTH_NAMES_AR = {
+  "2026-08":"أغسطس", "2026-09":"سبتمبر", "2026-10":"أكتوبر",
+  "2026-11":"نوفمبر", "2026-12":"ديسمبر", "2027-01":"يناير"
+};
+const MONTHS = (function buildMonths(){
+  const map = {};
+  WEEKS.forEach(w=>{
+    const key = w.start.slice(0,7);
+    if(!map[key]) map[key] = { key, name: MONTH_NAMES_AR[key] || key, weeks: [] };
+    map[key].weeks.push(w);
+  });
+  return Object.keys(map).sort().map(k=>map[k]);
+})();
+function monthSpan(m){
+  const f = m.weeks[0], l = m.weeks[m.weeks.length-1];
+  return `الأسابيع ${f.n}–${l.n} (${f.start.slice(5)} → ${l.end.slice(5)})`;
+}
+function monthTotals(m, ids){
+  return ids.map(id=>{
+    let abs=0, late=0, entered=0;
+    m.weeks.forEach(w=>{
+      const v = attendanceData[id]?.[w.n];
+      if(v!=null){ abs+=v.absences; late+=v.late; entered++; }
+    });
+    return { id, name: schoolsData[id]?.name || id, absences:abs, late,
+             score: abs*2+late, entered, hasData: entered>0 };
+  }).sort((a,b)=>{
+    if(!a.hasData && !b.hasData) return 0;
+    if(!a.hasData) return 1;
+    if(!b.hasData) return -1;
+    return a.score - b.score;
+  });
+}
+function catLabelOf(cat){
+  return cat==="primary" ? "الصفوف الأولية (١-٣)" : cat==="upper" ? "الصفوف العليا (٤-٦)" : "كل الفصول";
+}
+
 /* ---------- تحديد الأسبوع الحالي ---------- */
 function computeCurrentWeek(){
   const today = new Date();
@@ -453,13 +507,18 @@ onSnapshot(collection(db,"attendance"), snap=>{
 });
 
 fillWeekDropdown(document.getElementById("adminWeekSelect"));
-fillWeekDropdown(document.getElementById("reportWeekSelect"));
-(function addAllWeeksOption(){
-  const sel = document.getElementById("reportWeekSelect");
-  const opt = document.createElement("option");
-  opt.value = "all";
-  opt.textContent = "كل الأسابيع (تقرير شامل)";
-  sel.insertBefore(opt, sel.firstChild);
+(function fillMonthDropdown(){
+  const sel = document.getElementById("reportMonthSelect");
+  const all = document.createElement("option");
+  all.value = "all";
+  all.textContent = "كل الشهور (تقرير شامل)";
+  sel.appendChild(all);
+  MONTHS.forEach(m=>{
+    const opt = document.createElement("option");
+    opt.value = m.key;
+    opt.textContent = `${m.name} — ${monthSpan(m)}`;
+    sel.appendChild(opt);
+  });
 })();
 document.getElementById("adminWeekSelect").addEventListener("change", (e)=> showWeekNote("adminWeekNote", Number(e.target.value)) );
 
@@ -580,6 +639,48 @@ function renderDashboard(){
   } else {
     deltaBox.textContent = "يظهر التحليل العام بعد إدخال بيانات أسبوعين على الأقل.";
   }
+
+  renderMonthlyWinners();
+}
+
+/* ---------- الفصل الفائز لهذا الشهر ---------- */
+function computeCurrentMonth(){
+  const t = new Date();
+  const key = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}`;
+  const exact = MONTHS.find(m=>m.key===key);
+  if(exact) return exact;
+  if(t < new Date(WEEKS[0].start)) return MONTHS[0];
+  return MONTHS[MONTHS.length-1];
+}
+
+function renderMonthlyWinners(){
+  const box = document.getElementById("monthlyWinners");
+  if(!box) return;
+  const m = computeCurrentMonth();
+  const cats = currentCategoryFilter === "all"
+    ? [{key:"primary", label:"الصفوف الأولية"}, {key:"upper", label:"الصفوف العليا"}]
+    : [{key:currentCategoryFilter, label: currentCategoryFilter==="primary" ? "الصفوف الأولية" : "الصفوف العليا"}];
+
+  const wins = cats.map(c=>{
+    const ids = SCHOOL_IDS.filter(id => (schoolsData[id]?.category||"primary") === c.key);
+    const t = monthTotals(m, ids).filter(x=>x.hasData);
+    return t.length ? { catLabel:c.label, name:t[0].name, score:t[0].score }
+                    : { catLabel:c.label, name:null };
+  });
+  const hasAny = wins.some(w=>w.name);
+
+  box.innerHTML = `
+    <div class="mw-item">
+      <div class="mw-month">${m.name}  —  ${monthSpan(m)}</div>
+      ${hasAny ? wins.map(w=>`
+        <div class="mw-row">
+          <span class="mw-cat">${w.catLabel}</span>
+          ${w.name
+            ? `<span class="mw-win">🏆 ${w.name}</span><span class="mw-score">مؤشر الانضباط ${w.score}</span>`
+            : `<span class="mw-score">لم تُدخل بيانات بعد</span>`}
+        </div>`).join("")
+      : `<div class="fb-empty">يظهر الفصل الفائز بعد إدخال بيانات هذا الشهر</div>`}
+    </div>`;
 }
 
 function renderAdminSchoolLog(){
@@ -715,69 +816,84 @@ document.getElementById("btnAdminSaveAttendance").addEventListener("click", asyn
   msg.className="msg ok"; msg.textContent="تم حفظ التعديل ✓";
 });
 
-/* ---------- تقرير أسبوعي (طباعة/حفظ PDF) ---------- */
+/* ---------- تقرير شهري (طباعة/حفظ PDF) ---------- */
 function getIdsByCategory(cat){
   if(cat === "all") return SCHOOL_IDS;
   return SCHOOL_IDS.filter(id => (schoolsData[id]?.category || "primary") === cat);
 }
 
-function buildWeekSection(w, ids, pageBreak){
-  const rows = ids.map(id=>{
-    const val = attendanceData[id]?.[w.n];
-    const score = val!=null ? val.absences*2 + val.late : null;
-    return { name: schoolsData[id]?.name || id, val, score };
-  }).sort((a,b)=>{
-    if(a.score==null && b.score==null) return 0;
-    if(a.score==null) return 1;
-    if(b.score==null) return -1;
-    return a.score - b.score;
-  });
-
+function buildMonthSection(m, ids, pageBreak){
+  const totals = monthTotals(m, ids);
+  const withData = totals.filter(t=>t.hasData);
   const medals = ["🥇","🥈","🥉"];
-  const rowsHtml = rows.length
-    ? rows.map((r,i)=>`
-      <tr>
-        <td>${medals[i]||(i+1)}</td>
-        <td>${r.name}</td>
-        <td>${r.val!=null ? r.val.absences : "—"}</td>
-        <td>${r.val!=null ? r.val.late : "—"}</td>
-        <td>${r.score!=null ? r.score : "لم تُدخل بيانات"}</td>
-      </tr>`).join("")
-    : `<tr><td colspan="5" class="note">لا توجد فصول ضمن هذه الفئة</td></tr>`;
 
-  const noteHtml = w.note ? `<p class="note">⚠️ ${w.note}</p>` : "";
+  const rowsHtml = totals.length
+    ? totals.map((t,i)=>`
+      <tr>
+        <td>${t.hasData ? (medals[i]||(i+1)) : "—"}</td>
+        <td>${t.name}</td>
+        <td>${t.hasData ? t.absences : "—"}</td>
+        <td>${t.hasData ? t.late : "—"}</td>
+        <td>${t.hasData ? t.score : "لم تُدخل بيانات"}</td>
+        <td>${t.entered} / ${m.weeks.length}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="6" class="note">لا توجد فصول ضمن هذه الفئة</td></tr>`;
+
+  const winnerHtml = withData.length
+    ? `<p class="winner">🏆 الفصل الفائز لشهر ${m.name}: <strong>${withData[0].name}</strong> — مؤشر الانضباط ${withData[0].score}</p>`
+    : `<p class="note">لم تُدخل بيانات لهذا الشهر بعد.</p>`;
+
+  const notesHtml = m.weeks.filter(w=>w.note)
+    .map(w=>`<p class="note">⚠️ الأسبوع ${w.n}: ${w.note}</p>`).join("");
+
+  const weekRows = m.weeks.map(w=>{
+    const cells = ids.map(id=>{
+      const v = attendanceData[id]?.[w.n];
+      return `<td>${v!=null ? (v.absences*2+v.late) : "—"}</td>`;
+    }).join("");
+    return `<tr><td>الأسبوع ${w.n}</td><td>${fmtRange(w)}</td>${cells}</tr>`;
+  }).join("");
+  const weekHead = ids.map(id=>`<th>${schoolsData[id]?.name || id}</th>`).join("");
+  const breakdownHtml = ids.length ? `
+    <h3 class="sub-title">تفصيل أسابيع الشهر (مؤشر الانضباط)</h3>
+    <table>
+      <thead><tr><th>الأسبوع</th><th>التاريخ</th>${weekHead}</tr></thead>
+      <tbody>${weekRows}</tbody>
+    </table>` : "";
 
   return `
   <section${pageBreak ? ' style="page-break-after:always;"' : ''}>
-    <h2 class="week-title">الأسبوع ${w.n} من 19  —  (${fmtRange(w)})</h2>
-    ${noteHtml}
+    <h2 class="week-title">شهر ${m.name}  —  ${monthSpan(m)}</h2>
+    ${notesHtml}
+    ${winnerHtml}
     <table>
-      <thead><tr><th>#</th><th>الفصل</th><th>غياب</th><th>تأخر</th><th>مؤشر الانضباط</th></tr></thead>
+      <thead><tr><th>#</th><th>الفصل</th><th>غياب</th><th>تأخر</th><th>مؤشر الانضباط</th><th>الأسابيع المُدخلة</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
-    <p class="note">مؤشر الانضباط = (الغياب × ٢) + (التأخر × ١) — الأقل هو الأكثر انضباطًا.</p>
+    <p class="note-plain">مؤشر الانضباط = (الغياب × ٢) + (التأخر × ١) — الأقل هو الأكثر انضباطًا.</p>
+    ${breakdownHtml}
   </section>`;
 }
 
 document.getElementById("btnDownloadReport").addEventListener("click", ()=>{
-  const selected = document.getElementById("reportWeekSelect").value;
+  const selected = document.getElementById("reportMonthSelect").value;
   const catValue = document.getElementById("reportCategorySelect").value;
   const ids = getIdsByCategory(catValue);
   const today = new Date().toLocaleDateString('ar-SA', {year:'numeric', month:'long', day:'numeric'});
   const isAll = selected === "all";
-  const catLabel = catValue==="primary" ? "الصفوف الأولية (١-٣)" : catValue==="upper" ? "الصفوف العليا (٤-٦)" : "كل الفصول";
+  const catLabel = catLabelOf(catValue);
 
   let titleText, metaText, bodyHtml;
   if(isAll){
-    titleText = "تقرير شامل — كل الأسابيع";
-    metaText = `تقرير شامل لكل أسابيع الفصل الدراسي الأول — ${catLabel}  —  تم إنشاء التقرير بتاريخ ${today}`;
-    bodyHtml = WEEKS.map((w,i)=> buildWeekSection(w, ids, i < WEEKS.length-1)).join("");
+    titleText = "تقرير شامل — كل الشهور";
+    metaText = `تقرير شامل لكل شهور الفصل الدراسي الأول — ${catLabel}  —  تم إنشاء التقرير بتاريخ ${today}`;
+    bodyHtml = MONTHS.map((m,i)=> buildMonthSection(m, ids, i < MONTHS.length-1)).join("");
   } else {
-    const w = WEEKS.find(x=>x.n===Number(selected));
-    if(!w) return;
-    titleText = `تقرير الأسبوع ${w.n}`;
+    const m = MONTHS.find(x=>x.key===selected);
+    if(!m) return;
+    titleText = `تقرير شهر ${m.name}`;
     metaText = `${catLabel}  —  تم إنشاء التقرير بتاريخ ${today}`;
-    bodyHtml = buildWeekSection(w, ids, false);
+    bodyHtml = buildMonthSection(m, ids, false);
   }
 
   const reportHtml = `
@@ -797,6 +913,10 @@ document.getElementById("btnDownloadReport").addEventListener("click", ()=>{
   th{background:#F7F5F1;color:#6B7A73;font-size:12.5px;}
   tr:first-child td{font-weight:800;color:#C9A227;}
   .note{background:#FBEAE6;color:#B3462C;padding:10px 12px;border-radius:8px;font-size:13px;}
+  .note-plain{color:#6B7A73;font-size:12px;margin-top:8px;}
+  .winner{background:#E9F3EF;color:#0C3D31;padding:11px 14px;border-radius:8px;font-size:14px;
+    border-right:4px solid #C9A227;margin:12px 0 4px;}
+  h3.sub-title{font-family:'Cairo';font-size:13.5px;color:#145C4B;margin-top:22px;font-weight:700;}
   footer{margin-top:40px;border-top:1px solid #E4E0D8;padding-top:14px;font-size:12px;color:#6B7A73;text-align:center;}
   @media print{ body{margin:14mm;} }
 </style>
