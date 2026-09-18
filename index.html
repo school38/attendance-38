@@ -197,14 +197,15 @@
     </div>
 
     <div class="card">
-      <h2>الاتجاه الأسبوعي لكل فصل</h2>
+      <h2>الاتجاه الشهري لكل فصل</h2>
       <canvas id="lineChart" height="180"></canvas>
     </div>
 
     <div class="card">
-      <h2>التحليل العام (مؤشر الانضباط أسبوعيًا لكل الفصول)</h2>
+      <h2>التحليل العام (مؤشر الانضباط شهريًا لكل الفصول)</h2>
       <canvas id="trendChart" height="150"></canvas>
       <div id="trendDelta" class="note"></div>
+      <div class="note">ملاحظة: عدد أسابيع الشهور غير متساوٍ (أغسطس أسبوعان، يناير أسبوع واحد)، فالمقارنة بين الشهور تقريبية.</div>
     </div>
 
     <div class="card">
@@ -589,19 +590,23 @@ function renderDashboard(){
     options:{ plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{precision:0}}} }
   });
 
-  // خط اتجاه كل فصل (مؤشر الانضباط الأسبوعي)
+  // خط اتجاه كل فصل (مؤشر الانضباط الشهري)
   const lc = document.getElementById("lineChart");
-  const weekLabels = WEEKS.map(w=>"أسبوع "+w.n);
+  const monthLabels = MONTHS.map(m=>m.name);
   lineChart?.destroy();
   lineChart = new Chart(lc, {
     type:"line",
     data:{
-      labels: weekLabels,
+      labels: monthLabels,
       datasets: ids.map((id,i)=>({
         label: schoolsData[id]?.name||id,
-        data: WEEKS.map(w=>{
-          const v = attendanceData[id]?.[w.n];
-          return v!=null ? v.absences*2 + v.late : null;
+        data: MONTHS.map(m=>{
+          let sum=0, has=false;
+          m.weeks.forEach(w=>{
+            const v = attendanceData[id]?.[w.n];
+            if(v!=null){ sum += v.absences*2 + v.late; has=true; }
+          });
+          return has ? sum : null;
         }),
         borderColor: palette[i%palette.length],
         backgroundColor: palette[i%palette.length],
@@ -611,33 +616,38 @@ function renderDashboard(){
     options:{ plugins:{legend:{position:"bottom",labels:{boxWidth:10,font:{size:10}}}} }
   });
 
-  // تحليل عام: مجموع مؤشر الانضباط لكل الأسابيع
+  // تحليل عام: مجموع مؤشر الانضباط لكل شهر
   const tc = document.getElementById("trendChart");
-  const weeklySums = WEEKS.map(w=>{
+  const monthlySums = MONTHS.map(m=>{
     let sum=0, has=false;
-    ids.forEach(id=>{ const v=attendanceData[id]?.[w.n]; if(v!=null){sum+=v.absences*2+v.late; has=true;} });
+    ids.forEach(id=>{
+      m.weeks.forEach(w=>{
+        const v = attendanceData[id]?.[w.n];
+        if(v!=null){ sum += v.absences*2 + v.late; has=true; }
+      });
+    });
     return has?sum:null;
   });
   trendChart?.destroy();
   trendChart = new Chart(tc, {
     type:"line",
-    data:{ labels: weekLabels, datasets:[{ data: weeklySums, borderColor:"#145C4B",
+    data:{ labels: monthLabels, datasets:[{ data: monthlySums, borderColor:"#145C4B",
       backgroundColor:"rgba(20,92,75,.12)", fill:true, tension:.35, spanGaps:true }] },
     options:{ plugins:{legend:{display:false}} }
   });
 
-  // مؤشر الزيادة/النقصان آخر أسبوعين مسجّلين
-  const entered = weeklySums.map((v,i)=>({v,i})).filter(x=>x.v!=null);
+  // مؤشر الزيادة/النقصان آخر شهرين مسجّلين
+  const entered = monthlySums.map((v,i)=>({v,i})).filter(x=>x.v!=null);
   const deltaBox = document.getElementById("trendDelta");
   if(entered.length>=2){
     const last = entered[entered.length-1], prev = entered[entered.length-2];
     const diff = last.v - prev.v;
     const pct = prev.v? Math.round(Math.abs(diff)/prev.v*100) : 0;
     deltaBox.innerHTML = diff===0
-      ? `لا تغيير في مؤشر الانضباط العام بين الأسبوع ${prev.i+1} والأسبوع ${last.i+1}.`
-      : `مؤشر الانضباط العام ${diff>0?'ارتفع':'انخفض'} بنسبة تقريبية <span class="${diff>0?'delta-up':'delta-down'}">${pct}%</span> عن الأسبوع السابق (من ${prev.v} إلى ${last.v}).`;
+      ? `لا تغيير في مؤشر الانضباط العام بين شهر ${MONTHS[prev.i].name} وشهر ${MONTHS[last.i].name}.`
+      : `مؤشر الانضباط العام ${diff>0?'ارتفع':'انخفض'} بنسبة تقريبية <span class="${diff>0?'delta-up':'delta-down'}">${pct}%</span> عن شهر ${MONTHS[prev.i].name} (من ${prev.v} إلى ${last.v}).`;
   } else {
-    deltaBox.textContent = "يظهر التحليل العام بعد إدخال بيانات أسبوعين على الأقل.";
+    deltaBox.textContent = "يظهر التحليل العام بعد إدخال بيانات شهرين على الأقل.";
   }
 
   renderMonthlyWinners();
